@@ -1,0 +1,5 @@
+fastapi==0.162.2
+google-genai==3.0.0
+psutil==7.2.2
+python-dotenv==1.2.4
+uvicorn[standard]==0.54.0

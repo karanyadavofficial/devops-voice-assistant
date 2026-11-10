@@ -1,0 +1,11 @@
+services:
+  assistant:
+    build: .
+    container_name: devops-voice-assistant
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
