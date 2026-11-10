@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>DevOps Voice Assistant</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; }
+    button { font-size: 18px; padding: 10px 20px; margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h2>DevOps Voice Assistant</h2>
+  <p>Use headphones to avoid feedback.</p>
+  <button id="startBtn">Start</button>
+  <button id="stopBtn" disabled>Stop</button>
+  <p id="status">Not connected</p>
+  <p>Sent: <span id="sent">0</span> KB | Received: <span id="recv">0</span> KB</p>
+
+  <script>
+    const PLAY_RATE = 16000; // echo test; Gemini's rate comes in the next step
+    let ws, audioCtx, micStream, workletNode, playTime = 0;
+    let sentBytes = 0, recvBytes = 0;
+
+    const statusEl = document.getElementById("status");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+
+    startBtn.onclick = start;
+    stopBtn.onclick = stop;
+
+    async function start() {
+      startBtn.disabled = true;
+      try {
+        ws = new WebSocket(`ws://${location.host}/ws`);
+        ws.binaryType = "arraybuffer";
+        ws.onopen = () => { statusEl.textContent = "Connected - speak now"; };
+        ws.onclose = () => { statusEl.textContent = "Disconnected"; };
+        ws.onmessage = (event) => {
+          if (typeof event.data === "string") return;
+          recvBytes += event.data.byteLength;
+          document.getElementById("recv").textContent = (recvBytes / 1024).toFixed(0);
+          playPcm(event.data);
+        };
+
+        audioCtx = new AudioContext();
+        await audioCtx.audioWorklet.addModule("/static/mic-processor.js");
+
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 }
+        });
+
+        const source = audioCtx.createMediaStreamSource(micStream);
+        workletNode = new AudioWorkletNode(audioCtx, "mic-processor");
+        workletNode.port.onmessage = (e) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(e.data);
+            sentBytes += e.data.byteLength;
+            document.getElementById("sent").textContent = (sentBytes / 1024).toFixed(0);
+          }
+        };
+
+        // Silent output keeps the worklet running without playing your mic directly
+        const mute = audioCtx.createGain();
+        mute.gain.value = 0;
+        source.connect(workletNode);
+        workletNode.connect(mute);
+        mute.connect(audioCtx.destination);
+
+        stopBtn.disabled = false;
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+        startBtn.disabled = false;
+      }
+    }
+
+    function playPcm(arrayBuffer) {
+      const int16 = new Int16Array(arrayBuffer);
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768;
+
+      const buffer = audioCtx.createBuffer(1, float32.length, PLAY_RATE);
+      buffer.copyToChannel(float32, 0);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      if (playTime < now) playTime = now + 0.05;
+      src.start(playTime);
+      playTime += buffer.duration;
+    }
+
+    function stop() {
+      if (ws) ws.close();
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (audioCtx) audioCtx.close();
+      playTime = 0;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+  </script>
+</body>
+</html>
