@@ -87,3 +87,10 @@ def run_tool(name, args=None):
         return func(**(args or {}))
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+# --- Docker tools ---
+from docker_tools import DOCKER_DECLARATIONS, DOCKER_TOOLS  # noqa: E402
+
+TOOLS.update(DOCKER_TOOLS)
+TOOL_DECLARATIONS.extend(DOCKER_DECLARATIONS)
