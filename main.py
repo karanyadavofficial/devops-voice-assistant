@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
 
+from tools import TOOL_DECLARATIONS, run_tool
+
 load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
@@ -16,14 +18,21 @@ if not API_KEY:
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview")
 
-client = genai.Client(api_key=API_KEY, http_options=types.HttpOptions(api_version="v1beta"))
+client = genai.Client(
+    api_key=API_KEY,
+    http_options=types.HttpOptions(api_version="v1beta"),
+)
 
 LIVE_CONFIG = {
     "response_modalities": ["AUDIO"],
     "system_instruction": (
-        "You are a friendly DevOps voice assistant. "
-        "Keep your answers short and clear, like a helpful colleague."
+        "You are a friendly DevOps voice assistant that monitors the user's server. "
+        "When the user asks about CPU, memory, disk or system information, "
+        "always call the matching tool and answer using the real numbers it returns. "
+        "Never guess or invent numbers. "
+        "Keep answers short and clear, like a helpful colleague."
     ),
+    "tools": [{"function_declarations": TOOL_DECLARATIONS}],
 }
 
 app = FastAPI()
@@ -68,6 +77,23 @@ async def websocket_endpoint(websocket: WebSocket):
             async def gemini_to_browser():
                 while True:
                     async for response in session.receive():
+                        # 1) Gemini wants to run one of our tools
+                        if response.tool_call:
+                            function_responses = []
+                            for fc in response.tool_call.function_calls:
+                                print(f"Tool call: {fc.name}({dict(fc.args or {})})")
+                                result = await asyncio.to_thread(run_tool, fc.name, dict(fc.args or {}))
+                                print(f"Tool result: {result}")
+                                function_responses.append(
+                                    types.FunctionResponse(
+                                        id=fc.id,
+                                        name=fc.name,
+                                        response={"result": result},
+                                    )
+                                )
+                            await session.send_tool_response(function_responses=function_responses)
+
+                        # 2) Gemini is speaking: pass the audio to the browser
                         content = response.server_content
                         if content and content.model_turn:
                             for part in content.model_turn.parts:
@@ -82,7 +108,7 @@ async def websocket_endpoint(websocket: WebSocket):
             for task in pending:
                 task.cancel()
             for task in done:
-                task.result()  # re-raises any error so we can see it
+                task.result()
 
     except Exception as e:
         print(f"Error: {type(e).__name__}: {e}")
